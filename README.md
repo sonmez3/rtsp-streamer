@@ -31,11 +31,16 @@ ffmpeg -version
 
 Paket yöneticisinde bulunmadığı için manuel kurulum gerekir:
 
-1. [MediaMTX Releases](https://github.com/bluenviron/mediamtx/releases) sayfasından sisteminize uygun sürümü indirin.
+1. MediaMTX v1.16.3 sürümünü indirin:
+
+```bash
+wget https://github.com/bluenviron/mediamtx/releases/download/v1.16.3/mediamtx_v1.16.3_linux_amd64.tar.gz
+```
+
 2. Arşivi açın ve binary'yi PATH'e taşıyın:
 
 ```bash
-tar -xzf mediamtx_*_linux_amd64.tar.gz
+tar -xzf mediamtx_v1.16.3_linux_amd64.tar.gz
 sudo mv mediamtx /usr/local/bin/
 ```
 
@@ -160,7 +165,7 @@ Başarılı bir başlatma sonrası terminalde şu bilgiler görünür:
 
 [INFO] Starting MediaMTX...
 [INFO] MediaMTX started (PID 12345)
-[MTX] INF MediaMTX v1.x.x
+[MTX] INF MediaMTX v1.16.3
 [INFO] Starting FFmpeg...
 [INFO] FFmpeg started (PID 12346)
 
