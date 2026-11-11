@@ -1,7 +1,7 @@
 name: Release
 
-# Push a tag like v0.1.0 to publish a release:
-#   git tag v0.1.0 && git push origin v0.1.0
+# Push a tag like v1.0.0 to publish a release:
+#   git tag v1.0.0 && git push origin v1.0.0
 on:
   push:
     tags: ["v*"]
@@ -9,9 +9,13 @@ on:
 permissions:
   contents: write
 
+env:
+  DEBIAN_FRONTEND: noninteractive
+
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
@@ -22,9 +26,16 @@ jobs:
           go-version-file: go.mod
 
       - name: Install ffmpeg (needed by the end-to-end tests)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        timeout-minutes: 10
+        run: |
+          # apt rebuilds the man page index after every install, which can take
+          # many minutes on GitHub's runners. We don't need man pages here.
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get update -q
+          sudo -E apt-get install -y -q --no-install-recommends ffmpeg
 
       - name: Test before releasing
+        timeout-minutes: 10
         run: go test -race ./...
 
       - uses: goreleaser/goreleaser-action@v7
