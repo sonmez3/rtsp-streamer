@@ -9,12 +9,9 @@ on:
 permissions:
   contents: write
 
-env:
-  DEBIAN_FRONTEND: noninteractive
-
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -26,13 +23,8 @@ jobs:
           go-version-file: go.mod
 
       - name: Install ffmpeg (needed by the end-to-end tests)
-        timeout-minutes: 10
-        run: |
-          # apt rebuilds the man page index after every install, which can take
-          # many minutes on GitHub's runners. We don't need man pages here.
-          sudo rm -f /var/lib/man-db/auto-update
-          sudo apt-get update -q
-          sudo -E apt-get install -y -q --no-install-recommends ffmpeg
+        timeout-minutes: 5
+        run: bash .github/scripts/install-ffmpeg.sh
 
       - name: Test before releasing
         timeout-minutes: 10

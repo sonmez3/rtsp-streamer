@@ -13,12 +13,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  DEBIAN_FRONTEND: noninteractive
-
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -28,14 +25,8 @@ jobs:
           go-version-file: go.mod
 
       - name: Install ffmpeg (needed by the end-to-end tests)
-        timeout-minutes: 10
-        run: |
-          # apt rebuilds the man page index after every install, which can take
-          # many minutes on GitHub's runners. We don't need man pages here.
-          sudo rm -f /var/lib/man-db/auto-update
-          sudo apt-get update -q
-          sudo -E apt-get install -y -q --no-install-recommends ffmpeg
-          ffmpeg -version | head -1
+        timeout-minutes: 5
+        run: bash .github/scripts/install-ffmpeg.sh
 
       - name: Check formatting
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
@@ -46,7 +37,7 @@ jobs:
         timeout-minutes: 10
 
   package:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: test
     timeout-minutes: 20
     steps:
@@ -69,13 +60,18 @@ jobs:
           version: "~> v2"
           args: release --snapshot --clean
 
+      # This step uses apt on purpose: it checks that the .deb pulls in
+      # ffmpeg from Ubuntu the way it will on a user's machine.
       - name: Install the .deb the way the README says
         timeout-minutes: 10
         run: |
           ls -l dist
+          # apt rebuilds the man page index after every install, which can
+          # take minutes on GitHub's runners.
           sudo rm -f /var/lib/man-db/auto-update
-          sudo apt-get update -q
-          sudo -E apt-get install -y -q ./dist/rtsp-streamer_linux_amd64.deb
+          sudo apt-get update -q -o Acquire::Retries=3
+          sudo env DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y -q -o Acquire::Retries=3 ./dist/rtsp-streamer_linux_amd64.deb
           rtsp-streamer --version
           dpkg -s rtsp-streamer | grep -E '^(Version|Depends|Architecture)'
 
