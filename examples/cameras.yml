@@ -1,0 +1,27 @@
+# rtsp-streamer camera list. Run with:
+#   rtsp-streamer -c cameras.yml
+#
+# Every field except "source" is optional. Relative paths are relative to
+# this file. Command-line options (e.g. --codec) are defaults for every
+# camera; a value written here wins over them.
+
+port: 8554        # RTSP port
+# bind: 0.0.0.0   # listen address (default: all interfaces)
+udp: true         # let viewers use RTSP over UDP
+udp_port: 8000    # UDP ports for viewers: RTP 8000, RTCP 8001
+
+cameras:
+  # Simplest form: the stream name comes from the file name.
+  # -> rtsp://<ip>:8554/drone1
+  - source: videos/drone1.mp4
+
+  - name: drone2
+    source: videos/drone2.mkv
+    codec: h264         # auto (default) | copy | h264
+    bitrate: 2M         # re-encodes at this bitrate
+    audio: false        # drop the audio track
+
+  - name: gate
+    source: ~/videos/gate.mp4
+    loop: false         # play once; the program exits when all videos end
+    ffmpeg_args: ["-vf", "scale=1280:-2"]   # extra ffmpeg output arguments

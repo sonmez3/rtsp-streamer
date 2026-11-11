@@ -1,193 +1,169 @@
-# streamer-cli
+# rtsp-streamer
 
-MediaMTX ve FFmpeg'i tek komutla yöneten Go CLI aracı. Video dosyasını RTSP protokolü üzerinden yayınlamak için her iki aracı otomatik olarak başlatır ve yönetir.
+![CI](https://github.com/sonmez3/rtsp-streamer/actions/workflows/ci.yml/badge.svg)
+![Release](https://github.com/sonmez3/rtsp-streamer/actions/workflows/release.yml/badge.svg)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
----
+Video dosyalarını RTSP kamerası gibi yayınlayan Linux komut satırı aracı. Her video ayrı bir yayın olur:
 
-## Gereksinimler
+```
+rtsp-streamer drone1=a.mp4 drone2=b.mp4
 
-Aşağıdaki araçların sisteminizde kurulu ve PATH'te erişilebilir olması gerekir.
-
-### Go
-
-```bash
-# Ubuntu/Debian
-sudo apt install golang-go
-
-# Versiyon kontrolü
-go version
+  ● drone1  rtsp://192.168.1.20:8554/drone1  a.mp4 · video h264 copy · audio aac copy
+  ● drone2  rtsp://192.168.1.20:8554/drone2  b.mkv · video vp9 → h264 · audio none
 ```
 
-### FFmpeg
-
-```bash
-sudo apt install ffmpeg
-
-# Versiyon kontrolü
-ffmpeg -version
-```
-
-### MediaMTX
-
-Paket yöneticisinde bulunmadığı için manuel kurulum gerekir:
-
-1. MediaMTX v1.16.3 sürümünü indirin:
-
-```bash
-wget https://github.com/bluenviron/mediamtx/releases/download/v1.16.3/mediamtx_v1.16.3_linux_amd64.tar.gz
-```
-
-2. Arşivi açın ve binary'yi PATH'e taşıyın:
-
-```bash
-tar -xzf mediamtx_v1.16.3_linux_amd64.tar.gz
-sudo mv mediamtx /usr/local/bin/
-```
-
-3. Config dosyasını home dizinine kopyalayın:
-
-```bash
-mv mediamtx.yml ~/mediamtx.yml
-```
-
-4. Kurulumu doğrulayın:
-
-```bash
-which mediamtx   # /usr/local/bin/mediamtx
-which ffmpeg     # /usr/bin/ffmpeg
-```
-
----
+- **Tek program:** RTSP sunucusu içinde gömülü, MediaMTX gerekmez. Tek bağımlılık `ffmpeg`.
+- **Çoklu kamera:** İstediğin kadar video, her biri kendi adresinde.
+- **Düşük CPU:** H.264/H.265 videolar yeniden kodlanmadan gönderilir, diğerleri H.264'e çevrilir.
+- **TCP ve UDP:** İzleyiciler RTSP'yi TCP veya UDP üzerinden alabilir.
+- **Kendini toparlar:** ffmpeg çökerse kendiliğinden yeniden başlatılır.
+- **Güvenli yayın:** Kameralara yalnızca programın kendi ffmpeg'i yayın basabilir; ağdan biri araya giremez.
 
 ## Kurulum
 
-```bash
-git clone https://github.com/sonmez3/streamer-cli.git
-cd streamer-cli
-go build -o streamer .
-```
-
-İsterseniz binary'yi PATH'e taşıyabilirsiniz:
+**Debian / Ubuntu** (ffmpeg otomatik kurulur):
 
 ```bash
-sudo mv streamer /usr/local/bin/
+curl -LO https://github.com/sonmez3/rtsp-streamer/releases/latest/download/rtsp-streamer_linux_amd64.deb
+sudo apt install ./rtsp-streamer_linux_amd64.deb
 ```
 
----
+ARM cihazlarda (Raspberry Pi, Jetson) `amd64` yerine 64-bit sistemde `arm64`, 32-bit sistemde `armv7` yaz.
+
+**Fedora / RHEL** (önce ffmpeg kurulu olmalı, ör. `sudo dnf install ffmpeg-free`):
+
+```bash
+sudo dnf install https://github.com/sonmez3/rtsp-streamer/releases/latest/download/rtsp-streamer_linux_amd64.rpm
+```
+
+**Diğer Linux dağıtımları** (`ffmpeg` paket yöneticisinden kurulmalı):
+
+```bash
+curl -LO https://github.com/sonmez3/rtsp-streamer/releases/latest/download/rtsp-streamer_linux_amd64.tar.gz
+tar -xzf rtsp-streamer_linux_amd64.tar.gz
+sudo install -m 755 rtsp-streamer_linux_amd64/rtsp-streamer /usr/local/bin/
+```
+
+**Kaynak koddan** (Go 1.26+):
+
+```bash
+go install github.com/sonmez3/rtsp-streamer/cmd/rtsp-streamer@latest
+```
+
+Kontrol: `rtsp-streamer --version`
+
+İndirilen dosyaları doğrulamak için her sürümde bir `SHA256SUMS` dosyası bulunur.
 
 ## Kullanım
 
 ```bash
-streamer -v <video_dosyası> [seçenekler]
+rtsp-streamer video.mp4                       # rtsp://<ip>:8554/video
+rtsp-streamer drone1=a.mp4 drone2=b.mp4       # iki kamera, adları sen veriyorsun
+rtsp-streamer -c cameras.yml                  # kameralar dosyadan
+rtsp-streamer cam=a.mkv --codec h264 --bitrate 2M
+rtsp-streamer --no-loop video.mp4             # bir kez oynat, bitince çık
 ```
+
+Başladığında her kameranın adresi makinenin ağ IP'siyle yazdırılır; aynı ağdaki başka bir bilgisayardan doğrudan açılabilir. Durdurmak için `Ctrl+C`.
 
 ### Seçenekler
 
-| Parametre | Açıklama | Varsayılan |
+| Seçenek | Açıklama | Varsayılan |
 |---|---|---|
-| `-v <dosya>` | Yayınlanacak video dosyası **(zorunlu)** | — |
-| `--host <adres>` | RTSP sunucu adresi | `127.0.0.1` |
-| `--port <port>` | RTSP port | `8554` |
-| `--path <path>` | Stream path | `/test` |
-| `--preset <preset>` | FFmpeg x264 preset | `ultrafast` |
-| `--tune <tune>` | FFmpeg x264 tune | `zerolatency` |
-| `--loop` | Videoyu döngüye al | `true` |
-| `--config <dosya>` | mediamtx.yml dosya yolu | `~/mediamtx.yml` |
-| `--ffmpeg-extra <arg>` | Ekstra FFmpeg argümanı (tekrarlanabilir) | — |
-| `-h` | Yardım ekranını göster | — |
+| `[ad=]video` | Yayınlanacak video. Ad verilmezse dosya adından türetilir | — |
+| `-c, --config FILE` | Kameraları ve ayarları YAML dosyasından oku | — |
+| `-p, --port N` | RTSP portu | `8554` |
+| `--bind ADDR` | Sadece bu adreste dinle | tüm arayüzler |
+| `--udp-port N` | UDP ile izleyenler için portlar (RTP `N`, RTCP `N+1`) | `8000` |
+| `--no-udp` | İzleyiciler sadece TCP kullanabilsin | — |
+| `--codec MODE` | `auto`, `copy` veya `h264` (aşağıya bak) | `auto` |
+| `--bitrate RATE` | H.264 bit hızı, ör. `800k`, `2M` (yeniden kodlar) | — |
+| `--preset NAME` | x264 preset | `ultrafast` |
+| `--tune NAME` | x264 tune | `zerolatency` |
+| `--no-loop` | Videoyu döngüye almadan bir kez oynat | — |
+| `--no-audio` | Ses kanalını gönderme | — |
+| `--ffmpeg-args ARGS` | Ek ffmpeg çıkış argümanları, ör. `"-vf scale=1280:-2"` | — |
+| `--ffmpeg PATH` | Kullanılacak ffmpeg | `PATH`'teki |
+| `-v, --verbose` | ffmpeg'in tüm mesajlarını göster | — |
+| `--version` | Sürümü yazdır | — |
 
----
+**Codec modları**
 
-## Örnekler
+- `auto`: Video H.264 veya H.265 ise olduğu gibi gönderilir (CPU neredeyse sıfır). Değilse H.264'e çevrilir. `--bitrate` ya da `-vf` gibi bir video filtresi verilirse her zaman çevrilir.
+- `copy`: Hiç yeniden kodlama yapılmaz; kaynak H.264/H.265 değilse hata verir.
+- `h264`: Her zaman H.264'e çevrilir. Yeni izleyicinin hızlı görüntü alması için 2 saniyede bir anahtar kare eklenir.
 
-**Temel kullanım — varsayılan ayarlarla yayın:**
-```bash
-streamer -v /home/user/video.mp4
+Ses AAC, Opus veya G.711 ise olduğu gibi, değilse AAC'ye çevrilerek gönderilir.
+
+### Kamera dosyası
+
+Çok kamera için YAML dosyası daha rahattır. Tam örnek: [`examples/cameras.yml`](examples/cameras.yml). `.deb`/`.rpm` paketiyle kurduysan `/usr/share/doc/rtsp-streamer/cameras.example.yml` dosyasında da bulunur.
+
+```yaml
+port: 8554
+cameras:
+  - source: videos/drone1.mp4        # ad: drone1
+  - name: drone2
+    source: videos/drone2.mkv
+    codec: h264
+    bitrate: 2M
+    audio: false
+  - name: gate
+    source: ~/videos/gate.mp4
+    loop: false
+    ffmpeg_args: ["-vf", "scale=1280:-2"]
 ```
 
-**Farklı bir adres ve path ile yayın:**
-```bash
-streamer -v video.mp4 --host 192.168.1.10 --port 8554 --path /drone1
-```
+Göreli yollar dosyanın bulunduğu klasöre göredir. Komut satırındaki kamera seçenekleri (`--codec` vb.) tüm kameralar için varsayılandır; dosyada bir kameraya özel yazılan değer önceliklidir. `--port` gibi sunucu seçenekleri dosyadakini ezer.
 
-**Döngüyü kapat:**
-```bash
-streamer -v video.mp4 --loop=false
-```
-
-**Özel mediamtx config dosyası:**
-```bash
-streamer -v video.mp4 --config /etc/mediamtx/mediamtx.yml
-```
-
-**Ekstra FFmpeg argümanları:**
-```bash
-streamer -v video.mp4 --ffmpeg-extra "-b:v 2M" --ffmpeg-extra "-maxrate 2M"
-```
-
-**Yardım:**
-```bash
-streamer -h
-```
-
----
-
-## Çalışma Mantığı
-
-```
-streamer başlatıldı
-    │
-    ├─▶ MediaMTX başlatılır (RTSP sunucu ayağa kalkar)
-    │       1 saniye beklenir
-    │
-    ├─▶ FFmpeg başlatılır (video akışı başlar)
-    │
-    │   [MTX] MediaMTX log satırları
-    │   [FF]  FFmpeg log satırları
-    │
-    └─▶ Ctrl+C
-            │
-            ├─▶ FFmpeg'e SIGTERM
-            └─▶ MediaMTX'e SIGTERM
-```
-
-Başarılı bir başlatma sonrası terminalde şu bilgiler görünür:
-
-```
-=== streamer ===
-
-  Video:   /home/user/video.mp4
-  RTSP URL: rtsp://127.0.0.1:8554/test
-  Preset:  ultrafast
-  Tune:    zerolatency
-  Loop:    true
-  Config:  /home/user/mediamtx.yml
-
-[INFO] Starting MediaMTX...
-[INFO] MediaMTX started (PID 12345)
-[MTX] INF MediaMTX v1.16.3
-[INFO] Starting FFmpeg...
-[INFO] FFmpeg started (PID 12346)
-
- Stream active: rtsp://127.0.0.1:8554/test
-[INFO] Press Ctrl+C to stop.
-```
-
----
-
-## VLC ile izleme
+## İzleme
 
 ```bash
-vlc rtsp://127.0.0.1:8554/test
+vlc rtsp://192.168.1.20:8554/drone1
+ffplay rtsp://192.168.1.20:8554/drone1
+ffplay -rtsp_transport tcp rtsp://192.168.1.20:8554/drone1   # TCP'ye zorla
 ```
 
----
+Güvenlik duvarı açıksa şu portlara izin ver: TCP `8554` ve UDP `8000-8001`. Örneğin `sudo ufw allow 8554/tcp && sudo ufw allow 8000:8001/udp`.
 
-## Olası Hatalar
+## Sorun giderme
 
-| Hata | Çözüm |
+| Mesaj | Çözüm |
 |---|---|
-| `'mediamtx' not found in PATH` | MediaMTX kurulu değil veya PATH'te değil |
-| `'ffmpeg' not found in PATH` | FFmpeg kurulu değil: `sudo apt install ffmpeg` |
-| `Video file not found` | `-v` ile verilen dosya yolu hatalı |
-| FFmpeg bağlanamıyor | MediaMTX henüz hazır değil, birkaç saniye bekleyip tekrar deneyin |
+| `ffmpeg is not installed` | `sudo apt install ffmpeg` |
+| `address already in use` | Port başka bir programda (ör. MediaMTX). Onu durdur ya da `--port` / `--udp-port` ile başka port seç |
+| `can't read video file` | Dosya bozuk ya da video değil |
+| `codec copy only works with h264 or h265` | `--codec auto` veya `--codec h264` kullan |
+| `ffmpeg stopped ..., restarting` | ffmpeg beklenmedik şekilde kapandı ve yeniden başlatılıyor; ayrıntı için `--verbose` |
+| İzleyici bağlanıyor ama görüntü yok | Güvenlik duvarı UDP'yi engelliyor olabilir; oynatıcıyı TCP'ye zorla ya da `--no-udp` kullan |
+
+## Geliştirme
+
+```bash
+go build -o rtsp-streamer ./cmd/rtsp-streamer
+go test -race ./...        # uçtan uca testler için ffmpeg kurulu olmalı
+```
+
+Proje yapısı:
+
+```
+cmd/rtsp-streamer/   komut satırı
+internal/config/     argümanlar + YAML → kamera listesi
+internal/server/     gömülü RTSP sunucusu (gortsplib)
+internal/camera/     ffprobe, ffmpeg argümanları, ffmpeg'i ayakta tutan döngü
+internal/app/        hepsini birleştiren başlatma/kapatma akışı
+```
+
+### Sürüm çıkarmak
+
+`v` ile başlayan bir etiket gönderildiğinde GitHub Actions testleri çalıştırır ve [GoReleaser](https://goreleaser.com) ile `.deb`, `.rpm`, `.tar.gz` (amd64, arm64, armv7) ve `SHA256SUMS` dosyalarını release'e yükler:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+## Lisans
+
+[MIT](LICENSE)
