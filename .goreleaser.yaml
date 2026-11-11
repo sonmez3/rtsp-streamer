@@ -1,0 +1,76 @@
+# Builds the release files: tar.gz archives plus .deb and .rpm packages for
+# Linux amd64, arm64 and armv7. Run by .github/workflows/release.yml on tags.
+# Try it locally with: goreleaser release --snapshot --clean
+version: 2
+
+project_name: rtsp-streamer
+
+builds:
+  - id: rtsp-streamer
+    main: ./cmd/rtsp-streamer
+    binary: rtsp-streamer
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64, arm64, arm]
+    goarm: ["7"]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: archives
+    formats: [tar.gz]
+    # No version in the name, so ".../releases/latest/download/<name>" always works.
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}"
+    wrap_in_directory: true
+    files:
+      - README.md
+      - LICENSE
+      - examples/cameras.yml
+
+nfpms:
+  - id: packages
+    package_name: rtsp-streamer
+    file_name_template: "{{ .PackageName }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}"
+    homepage: https://github.com/sonmez3/rtsp-streamer
+    maintainer: sonmez3 <sonmez3@users.noreply.github.com>
+    description: |-
+      Stream video files as RTSP cameras.
+      Each video becomes its own RTSP stream served by a built-in server;
+      ffmpeg does the reading and encoding.
+    license: MIT
+    section: video
+    priority: optional
+    formats: [deb, rpm]
+    bindir: /usr/bin
+    contents:
+      - src: examples/cameras.yml
+        dst: /usr/share/doc/rtsp-streamer/cameras.example.yml
+      - src: LICENSE
+        dst: /usr/share/doc/rtsp-streamer/LICENSE
+      - src: README.md
+        dst: /usr/share/doc/rtsp-streamer/README.md
+    overrides:
+      deb:
+        dependencies: [ffmpeg]
+      rpm:
+        # A file dependency works with both Fedora's ffmpeg-free and RPM Fusion's ffmpeg.
+        dependencies: [/usr/bin/ffmpeg]
+
+checksum:
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"

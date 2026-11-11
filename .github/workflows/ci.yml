@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install ffmpeg (needed by the end-to-end tests)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+
+      - run: go vet ./...
+
+      - run: go test -race ./...
+
+  package:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: check
+
+      - name: Build packages (snapshot, nothing is published)
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean
+
+      - name: Install the .deb the way the README says and stream a test video
+        run: |
+          set -x
+          ls -l dist
+          sudo apt-get update
+          sudo apt-get install -y ./dist/rtsp-streamer_linux_amd64.deb
+          rtsp-streamer --version
+          dpkg -s rtsp-streamer | grep -E '^(Version|Depends|Architecture)'
+
+          ffmpeg -v error -f lavfi -i testsrc=size=320x240:rate=25 -t 3 -c:v libx264 /tmp/test.mp4
+          rtsp-streamer /tmp/test.mp4 &
+          pid=$!
+          sleep 5
+          timeout 15 ffprobe -v error -show_entries stream=codec_name -of csv=p=0 rtsp://127.0.0.1:8554/test | grep -x h264
+          kill -INT "$pid"
+          wait "$pid"
+
+      - name: Check the tar.gz
+        run: |
+          tmp="$(mktemp -d)"
+          tar -xzf dist/rtsp-streamer_linux_amd64.tar.gz -C "$tmp"
+          "$tmp"/rtsp-streamer_linux_amd64/rtsp-streamer --version
