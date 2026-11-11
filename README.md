@@ -4,7 +4,7 @@
 ![Release](https://github.com/sonmez3/rtsp-streamer/actions/workflows/release.yml/badge.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Video dosyalarını RTSP kamerası gibi yayınlayan Linux komut satırı aracı. Her video ayrı bir yayın olur:
+A Linux command-line tool that streams video files as RTSP cameras. Each video becomes its own stream:
 
 ```
 rtsp-streamer drone1=a.mp4 drone2=b.mp4
@@ -13,31 +13,31 @@ rtsp-streamer drone1=a.mp4 drone2=b.mp4
   ● drone2  rtsp://192.168.1.20:8554/drone2  b.mkv · video vp9 → h264 · audio none
 ```
 
-- **Tek program:** RTSP sunucusu içinde gömülü, MediaMTX gerekmez. Tek bağımlılık `ffmpeg`.
-- **Çoklu kamera:** İstediğin kadar video, her biri kendi adresinde.
-- **Düşük CPU:** H.264/H.265 videolar yeniden kodlanmadan gönderilir, diğerleri H.264'e çevrilir.
-- **TCP ve UDP:** İzleyiciler RTSP'yi TCP veya UDP üzerinden alabilir.
-- **Kendini toparlar:** ffmpeg çökerse kendiliğinden yeniden başlatılır.
-- **Güvenli yayın:** Kameralara yalnızca programın kendi ffmpeg'i yayın basabilir; ağdan biri araya giremez.
+- **One program:** the RTSP server is built in, no MediaMTX needed. The only dependency is `ffmpeg`.
+- **Many cameras:** as many videos as you like, each at its own URL.
+- **Low CPU:** H.264/H.265 videos are sent without re-encoding; anything else is converted to H.264.
+- **TCP and UDP:** viewers can receive RTSP over TCP or UDP.
+- **Self-healing:** if ffmpeg crashes, it is restarted automatically.
+- **Safe publishing:** only rtsp-streamer's own ffmpeg can publish to the cameras; nobody on the network can hijack a stream.
 
-## Kurulum
+## Install
 
-**Debian / Ubuntu** (ffmpeg otomatik kurulur):
+**Debian / Ubuntu** (installs ffmpeg automatically):
 
 ```bash
 curl -LO https://github.com/sonmez3/rtsp-streamer/releases/latest/download/rtsp-streamer_linux_amd64.deb
 sudo apt install ./rtsp-streamer_linux_amd64.deb
 ```
 
-ARM cihazlarda (Raspberry Pi, Jetson) `amd64` yerine 64-bit sistemde `arm64`, 32-bit sistemde `armv7` yaz.
+On ARM devices (Raspberry Pi, Jetson) use `arm64` on a 64-bit OS or `armv7` on a 32-bit OS instead of `amd64`.
 
-**Fedora / RHEL** (önce ffmpeg kurulu olmalı, ör. `sudo dnf install ffmpeg-free`):
+**Fedora / RHEL** (install ffmpeg first, e.g. `sudo dnf install ffmpeg-free`):
 
 ```bash
 sudo dnf install https://github.com/sonmez3/rtsp-streamer/releases/latest/download/rtsp-streamer_linux_amd64.rpm
 ```
 
-**Diğer Linux dağıtımları** (`ffmpeg` paket yöneticisinden kurulmalı):
+**Other Linux distributions** (install `ffmpeg` with your package manager):
 
 ```bash
 curl -LO https://github.com/sonmez3/rtsp-streamer/releases/latest/download/rtsp-streamer_linux_amd64.tar.gz
@@ -45,65 +45,65 @@ tar -xzf rtsp-streamer_linux_amd64.tar.gz
 sudo install -m 755 rtsp-streamer_linux_amd64/rtsp-streamer /usr/local/bin/
 ```
 
-**Kaynak koddan** (Go 1.26+):
+**From source** (Go 1.26+):
 
 ```bash
 go install github.com/sonmez3/rtsp-streamer/cmd/rtsp-streamer@latest
 ```
 
-Kontrol: `rtsp-streamer --version`
+Check the install with `rtsp-streamer --version`.
 
-İndirilen dosyaları doğrulamak için her sürümde bir `SHA256SUMS` dosyası bulunur.
+Every release includes a `SHA256SUMS` file for verifying the downloads.
 
-## Kullanım
+## Usage
 
 ```bash
 rtsp-streamer video.mp4                       # rtsp://<ip>:8554/video
-rtsp-streamer drone1=a.mp4 drone2=b.mp4       # iki kamera, adları sen veriyorsun
-rtsp-streamer -c cameras.yml                  # kameralar dosyadan
+rtsp-streamer drone1=a.mp4 drone2=b.mp4       # two cameras, named by you
+rtsp-streamer -c cameras.yml                  # cameras from a file
 rtsp-streamer cam=a.mkv --codec h264 --bitrate 2M
-rtsp-streamer --no-loop video.mp4             # bir kez oynat, bitince çık
+rtsp-streamer --no-loop video.mp4             # play once, exit when done
 ```
 
-Başladığında her kameranın adresi makinenin ağ IP'siyle yazdırılır; aynı ağdaki başka bir bilgisayardan doğrudan açılabilir. Durdurmak için `Ctrl+C`.
+On startup, each camera's URL is printed with the machine's network IP, so it can be opened directly from another computer on the same network. Press `Ctrl+C` to stop.
 
-### Seçenekler
+### Options
 
-| Seçenek | Açıklama | Varsayılan |
+| Option | Description | Default |
 |---|---|---|
-| `[ad=]video` | Yayınlanacak video. Ad verilmezse dosya adından türetilir | — |
-| `-c, --config FILE` | Kameraları ve ayarları YAML dosyasından oku | — |
-| `-p, --port N` | RTSP portu | `8554` |
-| `--bind ADDR` | Sadece bu adreste dinle | tüm arayüzler |
-| `--udp-port N` | UDP ile izleyenler için portlar (RTP `N`, RTCP `N+1`) | `8000` |
-| `--no-udp` | İzleyiciler sadece TCP kullanabilsin | — |
-| `--codec MODE` | `auto`, `copy` veya `h264` (aşağıya bak) | `auto` |
-| `--bitrate RATE` | H.264 bit hızı, ör. `800k`, `2M` (yeniden kodlar) | — |
+| `[name=]video` | Video to stream. Without a name, the name comes from the file name | — |
+| `-c, --config FILE` | Read cameras and settings from a YAML file | — |
+| `-p, --port N` | RTSP port | `8554` |
+| `--bind ADDR` | Listen only on this address | all interfaces |
+| `--udp-port N` | Ports for UDP viewers (RTP `N`, RTCP `N+1`) | `8000` |
+| `--no-udp` | Viewers may only use TCP | — |
+| `--codec MODE` | `auto`, `copy` or `h264` (see below) | `auto` |
+| `--bitrate RATE` | H.264 bitrate, e.g. `800k`, `2M` (re-encodes) | — |
 | `--preset NAME` | x264 preset | `ultrafast` |
 | `--tune NAME` | x264 tune | `zerolatency` |
-| `--no-loop` | Videoyu döngüye almadan bir kez oynat | — |
-| `--no-audio` | Ses kanalını gönderme | — |
-| `--ffmpeg-args ARGS` | Ek ffmpeg çıkış argümanları, ör. `"-vf scale=1280:-2"` | — |
-| `--ffmpeg PATH` | Kullanılacak ffmpeg | `PATH`'teki |
-| `-v, --verbose` | ffmpeg'in tüm mesajlarını göster | — |
-| `--version` | Sürümü yazdır | — |
+| `--no-loop` | Play each video once instead of looping | — |
+| `--no-audio` | Don't send the audio track | — |
+| `--ffmpeg-args ARGS` | Extra ffmpeg output arguments, e.g. `"-vf scale=1280:-2"` | — |
+| `--ffmpeg PATH` | ffmpeg binary to use | from `PATH` |
+| `-v, --verbose` | Show all ffmpeg messages | — |
+| `--version` | Print the version | — |
 
-**Codec modları**
+**Codec modes**
 
-- `auto`: Video H.264 veya H.265 ise olduğu gibi gönderilir (CPU neredeyse sıfır). Değilse H.264'e çevrilir. `--bitrate` ya da `-vf` gibi bir video filtresi verilirse her zaman çevrilir.
-- `copy`: Hiç yeniden kodlama yapılmaz; kaynak H.264/H.265 değilse hata verir.
-- `h264`: Her zaman H.264'e çevrilir. Yeni izleyicinin hızlı görüntü alması için 2 saniyede bir anahtar kare eklenir.
+- `auto`: H.264 and H.265 videos are sent as is (almost no CPU). Other codecs are converted to H.264. Giving `--bitrate` or a video filter such as `-vf` always converts.
+- `copy`: never re-encode; fails if the source isn't H.264/H.265.
+- `h264`: always convert to H.264. A keyframe is inserted every 2 seconds so new viewers get a picture quickly.
 
-Ses AAC, Opus veya G.711 ise olduğu gibi, değilse AAC'ye çevrilerek gönderilir.
+Audio is sent as is when it is AAC, Opus or G.711, otherwise it is converted to AAC.
 
-### Kamera dosyası
+### Camera file
 
-Çok kamera için YAML dosyası daha rahattır. Tam örnek: [`examples/cameras.yml`](examples/cameras.yml). `.deb`/`.rpm` paketiyle kurduysan `/usr/share/doc/rtsp-streamer/cameras.example.yml` dosyasında da bulunur.
+For many cameras a YAML file is easier. Full example: [`examples/cameras.yml`](examples/cameras.yml). If you installed the `.deb`/`.rpm` package it is also at `/usr/share/doc/rtsp-streamer/cameras.example.yml`.
 
 ```yaml
 port: 8554
 cameras:
-  - source: videos/drone1.mp4        # ad: drone1
+  - source: videos/drone1.mp4        # name: drone1
   - name: drone2
     source: videos/drone2.mkv
     codec: h264
@@ -115,55 +115,55 @@ cameras:
     ffmpeg_args: ["-vf", "scale=1280:-2"]
 ```
 
-Göreli yollar dosyanın bulunduğu klasöre göredir. Komut satırındaki kamera seçenekleri (`--codec` vb.) tüm kameralar için varsayılandır; dosyada bir kameraya özel yazılan değer önceliklidir. `--port` gibi sunucu seçenekleri dosyadakini ezer.
+Relative paths are relative to the file's folder. Camera options on the command line (`--codec` etc.) are defaults for every camera; a value set for a camera in the file wins. Server options such as `--port` override the file.
 
-## İzleme
+## Watching
 
 ```bash
 vlc rtsp://192.168.1.20:8554/drone1
 ffplay rtsp://192.168.1.20:8554/drone1
-ffplay -rtsp_transport tcp rtsp://192.168.1.20:8554/drone1   # TCP'ye zorla
+ffplay -rtsp_transport tcp rtsp://192.168.1.20:8554/drone1   # force TCP
 ```
 
-Güvenlik duvarı açıksa şu portlara izin ver: TCP `8554` ve UDP `8000-8001`. Örneğin `sudo ufw allow 8554/tcp && sudo ufw allow 8000:8001/udp`.
+If a firewall is on, allow TCP `8554` and UDP `8000-8001`, for example `sudo ufw allow 8554/tcp && sudo ufw allow 8000:8001/udp`.
 
-## Sorun giderme
+## Troubleshooting
 
-| Mesaj | Çözüm |
+| Message | Fix |
 |---|---|
 | `ffmpeg is not installed` | `sudo apt install ffmpeg` |
-| `address already in use` | Port başka bir programda (ör. MediaMTX). Onu durdur ya da `--port` / `--udp-port` ile başka port seç |
-| `can't read video file` | Dosya bozuk ya da video değil |
-| `codec copy only works with h264 or h265` | `--codec auto` veya `--codec h264` kullan |
-| `ffmpeg stopped ..., restarting` | ffmpeg beklenmedik şekilde kapandı ve yeniden başlatılıyor; ayrıntı için `--verbose` |
-| İzleyici bağlanıyor ama görüntü yok | Güvenlik duvarı UDP'yi engelliyor olabilir; oynatıcıyı TCP'ye zorla ya da `--no-udp` kullan |
+| `address already in use` | Another program (e.g. MediaMTX) is using the port. Stop it, or pick other ports with `--port` / `--udp-port` |
+| `can't read video file` | The file is damaged or not a video |
+| `codec copy only works with h264 or h265` | Use `--codec auto` or `--codec h264` |
+| `ffmpeg stopped ..., restarting` | ffmpeg exited unexpectedly and is being restarted; use `--verbose` for details |
+| Viewer connects but shows no picture | A firewall may be blocking UDP; force the player to TCP or use `--no-udp` |
 
-## Geliştirme
+## Development
 
 ```bash
 go build -o rtsp-streamer ./cmd/rtsp-streamer
-go test -race ./...        # uçtan uca testler için ffmpeg kurulu olmalı
+go test -race ./...        # the end-to-end tests need ffmpeg installed
 ```
 
-Proje yapısı:
+Project layout:
 
 ```
-cmd/rtsp-streamer/   komut satırı
-internal/config/     argümanlar + YAML → kamera listesi
-internal/server/     gömülü RTSP sunucusu (gortsplib)
-internal/camera/     ffprobe, ffmpeg argümanları, ffmpeg'i ayakta tutan döngü
-internal/app/        hepsini birleştiren başlatma/kapatma akışı
+cmd/rtsp-streamer/   command line
+internal/config/     arguments + YAML → camera list
+internal/server/     built-in RTSP server (gortsplib)
+internal/camera/     ffprobe, ffmpeg arguments, loop that keeps ffmpeg running
+internal/app/        startup and shutdown that ties it all together
 ```
 
-### Sürüm çıkarmak
+### Releasing
 
-`v` ile başlayan bir etiket gönderildiğinde GitHub Actions testleri çalıştırır ve [GoReleaser](https://goreleaser.com) ile `.deb`, `.rpm`, `.tar.gz` (amd64, arm64, armv7) ve `SHA256SUMS` dosyalarını release'e yükler:
+Pushing a tag that starts with `v` makes GitHub Actions run the tests and use [GoReleaser](https://goreleaser.com) to upload `.deb`, `.rpm` and `.tar.gz` files (amd64, arm64, armv7) plus `SHA256SUMS` to the release:
 
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-## Lisans
+## License
 
 [MIT](LICENSE)
