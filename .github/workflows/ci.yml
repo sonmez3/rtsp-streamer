@@ -60,20 +60,32 @@ jobs:
           version: "~> v2"
           args: release --snapshot --clean
 
-      # This step uses apt on purpose: it checks that the .deb pulls in
-      # ffmpeg from Ubuntu the way it will on a user's machine.
+      # This step tries apt first on purpose: it checks that the .deb pulls in
+      # ffmpeg from Ubuntu the way it will on a user's machine. GitHub's
+      # runners sometimes can't resolve the Ubuntu package servers' names; then
+      # apt would hang until the timeout, so the step falls back to dpkg and a
+      # static ffmpeg and leaves a warning on the run.
       - name: Install the .deb the way the README says
         timeout-minutes: 10
         run: |
           ls -l dist
+          deb=./dist/rtsp-streamer_linux_amd64.deb
+          dpkg-deb -f "$deb" Package Version Architecture Depends
+          # The package must pull in ffmpeg, even if apt can't show it below.
+          dpkg-deb -f "$deb" Depends | grep -qw ffmpeg
           # apt rebuilds the man page index after every install, which can
           # take minutes on GitHub's runners.
           sudo rm -f /var/lib/man-db/auto-update
-          sudo apt-get update -q -o Acquire::Retries=3
-          sudo env DEBIAN_FRONTEND=noninteractive \
-            apt-get install -y -q -o Acquire::Retries=3 ./dist/rtsp-streamer_linux_amd64.deb
+          if sudo timeout 3m apt-get update -q --error-on=any &&
+            sudo env DEBIAN_FRONTEND=noninteractive \
+              timeout 4m apt-get install -y -q "$deb"; then
+            echo "Installed with apt."
+          else
+            echo "::warning::Ubuntu package servers were unreachable, so the .deb was installed with dpkg and a static ffmpeg instead of apt."
+            bash .github/scripts/install-ffmpeg.sh
+            sudo dpkg -i --force-depends "$deb"
+          fi
           rtsp-streamer --version
-          dpkg -s rtsp-streamer | grep -E '^(Version|Depends|Architecture)'
 
       - name: Stream a test video with the installed package
         timeout-minutes: 3
