@@ -7,6 +7,9 @@ import (
 )
 
 func TestCLI(t *testing.T) {
+	// Without videos, a terminal gets the interactive UI; tests have none.
+	isInteractive = func() bool { return false }
+
 	tests := []struct {
 		args     []string
 		code     int

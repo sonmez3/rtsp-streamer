@@ -160,8 +160,14 @@ func TestParseProbe(t *testing.T) {
 }
 
 func TestProbeError(t *testing.T) {
-	stderr := "[mov @ 0x1] moov atom not found\n/v/a.mp4: Invalid data found when processing input\n"
+	stderr := "/v/a.mp4: Invalid data found when processing input\n"
 	if got := probeError(stderr, "/v/a.mp4", nil); got != "Invalid data found when processing input" {
+		t.Errorf("got %q", got)
+	}
+
+	// A recording that was cut off gets a message that says so.
+	stderr = "[mov @ 0x1] moov atom not found\n/v/a.mp4: Invalid data found when processing input\n"
+	if got := probeError(stderr, "/v/a.mp4", nil); !strings.Contains(got, "recording was cut off") {
 		t.Errorf("got %q", got)
 	}
 }

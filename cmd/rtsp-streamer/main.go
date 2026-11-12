@@ -11,12 +11,14 @@ import (
 	"runtime/debug"
 	"syscall"
 
+	"github.com/charmbracelet/x/term"
 	"github.com/spf13/pflag"
 
 	"github.com/sonmez3/rtsp-streamer/internal/app"
 	"github.com/sonmez3/rtsp-streamer/internal/camera"
 	"github.com/sonmez3/rtsp-streamer/internal/config"
 	"github.com/sonmez3/rtsp-streamer/internal/logx"
+	"github.com/sonmez3/rtsp-streamer/internal/tui"
 )
 
 // Set at build time with -ldflags "-X main.version=...".
@@ -26,8 +28,13 @@ const usage = `rtsp-streamer streams video files as RTSP cameras.
 Each video becomes its own stream: rtsp://<this-machine>:8554/<name>
 
 Usage:
+  rtsp-streamer [options]                      # interactive UI
   rtsp-streamer [options] [name=]video ...
   rtsp-streamer -c cameras.yml [options]
+
+Without videos, rtsp-streamer opens an interactive UI where you pick videos
+and start and stop streams. It remembers its cameras in
+~/.config/rtsp-streamer/cameras.yml.
 
 Examples:
   rtsp-streamer video.mp4                      # rtsp://<ip>:8554/video
@@ -159,6 +166,15 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		defaults.ExtraArgs = append(defaults.ExtraArgs, parts...)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	// After the first Ctrl+C, a second one quits immediately.
+	go func() { <-ctx.Done(); stop() }()
+
+	if file == nil && len(fs.Args()) == 0 && isInteractive() {
+		return runUI(ctx, ov, defaults, ffmpegPath, verbose, stdout, stderr)
+	}
+
 	cfg, err := config.Build(file, ov, defaults, fs.Args())
 	if err != nil {
 		if errors.Is(err, config.ErrNoCameras) {
@@ -168,11 +184,6 @@ func run(argv []string, stdout, stderr io.Writer) int {
 		}
 		return 2
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	// After the first Ctrl+C, a second one quits immediately.
-	go func() { <-ctx.Done(); stop() }()
 
 	log := logx.New(stdout, logx.ColorEnabled(os.Stdout))
 	err = app.Run(ctx, app.Options{
@@ -184,6 +195,75 @@ func run(argv []string, stdout, stderr io.Writer) int {
 	})
 	if err != nil {
 		log.Errorf("", "%v", err)
+		return 1
+	}
+	return 0
+}
+
+// isInteractive reports whether the UI can run: it needs a terminal for both
+// input and output. Tests replace it.
+var isInteractive = func() bool {
+	return term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd())
+}
+
+// runUI runs the interactive UI with the camera list saved from last time.
+func runUI(ctx context.Context, ov config.Overrides, defaults config.CameraDefaults, ffmpegPath string, verbose bool, stdout, stderr io.Writer) int {
+	savePath, err := config.UIConfigPath()
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
+	}
+	file := &config.File{}
+	if _, err := os.Stat(savePath); err == nil {
+		if file, err = config.LoadFile(savePath); err != nil {
+			fmt.Fprintf(stderr, "error: saved camera list: %v\nFix or delete %s and try again.\n", err, savePath)
+			return 2
+		}
+	}
+	srv, err := config.BuildServer(file, ov)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 2
+	}
+
+	sink := tui.NewLogSink()
+	log := logx.New(sink, false)
+	eng, err := app.NewEngine(app.EngineOptions{
+		Bind:    srv.Bind,
+		Port:    srv.Port,
+		UDP:     srv.UDP,
+		UDPPort: srv.UDPPort,
+		FFmpeg:  ffmpegPath,
+		Verbose: verbose,
+		Log:     log,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
+	}
+	if err := eng.Listen(); err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
+	}
+
+	dir, _ := os.Getwd()
+	err = tui.Run(ctx, tui.Options{
+		Ctl:      eng,
+		Log:      log,
+		Version:  buildVersion(),
+		Host:     eng.Host(),
+		Port:     eng.Port(),
+		UDP:      srv.UDP,
+		File:     file,
+		SavePath: savePath,
+		Defaults: defaults,
+		Dir:      dir,
+	}, sink)
+	sink.Detach(stderr)
+	fmt.Fprintln(stdout, "Stopping all streams...")
+	eng.Close()
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 1
 	}
 	return 0

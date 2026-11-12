@@ -25,3 +25,4 @@ cameras:
     source: ~/videos/gate.mp4
     loop: false         # play once; the program exits when all videos end
     ffmpeg_args: ["-vf", "scale=1280:-2"]   # extra ffmpeg output arguments
+    # enabled: false    # keep the camera in this file without streaming it

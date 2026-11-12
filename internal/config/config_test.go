@@ -196,3 +196,91 @@ func TestLoadFileRejectsUnknownKeys(t *testing.T) {
 		t.Fatalf("expected unknown field error, got %v", err)
 	}
 }
+
+func TestDisabledCamerasAreSkipped(t *testing.T) {
+	dir := touch(t, "a.mp4", "b.mp4")
+	f := &File{Cameras: []FileCamera{
+		{Name: "on", Source: filepath.Join(dir, "a.mp4")},
+		{Name: "off", Source: filepath.Join(dir, "b.mp4"), Enabled: new(false)},
+	}}
+	cfg, err := Build(f, Overrides{}, BuiltinDefaults(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Cameras) != 1 || cfg.Cameras[0].Name != "on" {
+		t.Errorf("cameras %+v", cfg.Cameras)
+	}
+
+	f.Cameras = f.Cameras[1:]
+	if _, err := Build(f, Overrides{}, BuiltinDefaults(), nil); err == nil || !strings.Contains(err.Error(), "enabled: false") {
+		t.Errorf("all disabled: got %v", err)
+	}
+}
+
+func TestSaveAndLoadAgain(t *testing.T) {
+	dir := touch(t, "a.mp4", "b.mkv")
+	port := 9554
+	cams := []Camera{
+		BuiltinDefaults().NewCamera(),
+		BuiltinDefaults().NewCamera(),
+	}
+	cams[0].Name, cams[0].Source = "a", filepath.Join(dir, "a.mp4")
+	cams[1].Name, cams[1].Source = "b", filepath.Join(dir, "b.mkv")
+	cams[1].Loop, cams[1].Audio, cams[1].Codec, cams[1].Bitrate = false, false, CodecH264, "2M"
+	cams[1].ExtraArgs = []string{"-vf", "scale=640:-2"}
+
+	f := &File{Port: &port, Cameras: []FileCamera{cams[0].ToFile(true), cams[1].ToFile(false)}}
+	path := filepath.Join(t.TempDir(), "sub", "cameras.yml")
+	if err := WriteFile(path, f); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(path)
+	// Defaults are left out so the file stays short.
+	for _, absent := range []string{"loop: true", "audio: true", "codec: auto", "preset", "tune", "enabled: true", "udp"} {
+		if strings.Contains(string(data), absent) {
+			t.Errorf("saved file should not contain %q:\n%s", absent, data)
+		}
+	}
+
+	back, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, data)
+	}
+	if back.Port == nil || *back.Port != 9554 || len(back.Cameras) != 2 {
+		t.Fatalf("loaded %+v", back)
+	}
+	for i, want := range cams {
+		got, err := CameraFromFile(back.Cameras[i], BuiltinDefaults(), i)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Name != want.Name || got.Source != want.Source || got.Loop != want.Loop ||
+			got.Audio != want.Audio || got.Codec != want.Codec || got.Bitrate != want.Bitrate ||
+			strings.Join(got.ExtraArgs, " ") != strings.Join(want.ExtraArgs, " ") {
+			t.Errorf("camera %d: got %+v, want %+v", i, got, want)
+		}
+	}
+	if e := back.Cameras[1].Enabled; e == nil || *e {
+		t.Errorf("b should be disabled, got %v", e)
+	}
+}
+
+func TestBuildServer(t *testing.T) {
+	port, udpPort := 9554, 9000
+	cfg, err := BuildServer(&File{Port: &port, UDPPort: &udpPort}, Overrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Port != 9554 || cfg.UDPPort != 9000 || !cfg.UDP || len(cfg.Cameras) != 0 {
+		t.Errorf("got %+v", cfg)
+	}
+	flagPort := 7554
+	if cfg, _ := BuildServer(&File{Port: &port}, Overrides{Port: &flagPort}); cfg.Port != 7554 {
+		t.Errorf("the flag should win over the file, got %d", cfg.Port)
+	}
+	bad := 70000
+	if _, err := BuildServer(nil, Overrides{Port: &bad}); err == nil {
+		t.Error("port 70000 should be refused")
+	}
+}

@@ -79,6 +79,11 @@ func parseProbe(data []byte) (MediaInfo, error) {
 // probeError keeps the last line of ffprobe's output, which says what went
 // wrong, without the file path ffprobe puts in front of it.
 func probeError(stderr, path string, err error) string {
+	// MP4/MOV files get their index (the moov box) written when recording
+	// stops. Without it ffprobe only says "Invalid data found".
+	if strings.Contains(stderr, "moov atom not found") {
+		return "the file is incomplete: the recording was cut off before it was saved (moov atom not found)"
+	}
 	lines := strings.Split(strings.TrimSpace(stderr), "\n")
 	msg := strings.TrimSpace(lines[len(lines)-1])
 	msg = strings.TrimPrefix(msg, path+": ")

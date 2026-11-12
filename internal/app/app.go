@@ -8,12 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/url"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -45,93 +43,58 @@ func Run(ctx context.Context, o Options) error {
 		o.ReadyTimeout = 15 * time.Second
 	}
 
-	ffmpeg, ffprobe, err := findFFmpeg(o.FFmpeg)
+	e, err := NewEngine(EngineOptions{
+		Bind:    cfg.Bind,
+		Port:    cfg.Port,
+		UDP:     cfg.UDP,
+		UDPPort: cfg.UDPPort,
+		FFmpeg:  o.FFmpeg,
+		Verbose: o.Verbose,
+		Log:     log,
+	})
 	if err != nil {
 		return err
 	}
-
-	pass, err := randomHex(16)
-	if err != nil {
-		return err
-	}
-	const user = "publisher"
-
-	names := make([]string, len(cfg.Cameras))
-	once := make(map[string]bool)
-	for i, c := range cfg.Cameras {
-		names[i] = c.Name
-		once[c.Name] = !c.Loop
-	}
+	defer e.Close()
 
 	// Read every video before opening any port, so a bad file stops us early.
 	infos := make([]camera.MediaInfo, len(cfg.Cameras))
 	for i, cam := range cfg.Cameras {
-		infos[i], err = camera.Probe(ctx, ffprobe, cam.Source)
+		infos[i], err = e.Probe(ctx, cam)
 		if err != nil {
 			return fmt.Errorf("camera %q (%s): %w", cam.Name, cam.Source, err)
 		}
 	}
 
-	srv := server.New(server.Options{
-		Bind:        cfg.Bind,
-		Port:        cfg.Port,
-		UDP:         cfg.UDP,
-		UDPPort:     cfg.UDPPort,
-		Names:       names,
-		Once:        once,
-		PublishUser: user,
-		PublishPass: pass,
-		Log:         log,
-	})
-	if err := srv.Start(); err != nil {
-		return startError(err, cfg)
+	if err := e.Listen(); err != nil {
+		return err
 	}
-	defer srv.Close()
-	port := srv.Port()
-
-	publishHost := "127.0.0.1"
-	if ip := net.ParseIP(cfg.Bind); ip != nil && !ip.IsUnspecified() {
-		publishHost = cfg.Bind
-	}
-	runners := make([]*camera.Runner, len(cfg.Cameras))
+	names := make([]string, len(cfg.Cameras))
 	plans := make([]camera.Plan, len(cfg.Cameras))
 	for i, cam := range cfg.Cameras {
-		u := url.URL{
-			Scheme: "rtsp",
-			User:   url.UserPassword(user, pass),
-			Host:   net.JoinHostPort(publishHost, strconv.Itoa(port)),
-			Path:   "/" + cam.Name,
-		}
-		plan, err := camera.BuildPlan(cam, infos[i], u.String(), o.Verbose)
+		names[i] = cam.Name
+		plans[i], err = e.StartCamera(ctx, cam, &infos[i])
 		if err != nil {
 			return fmt.Errorf("camera %q (%s): %w", cam.Name, cam.Source, err)
 		}
-		plans[i] = plan
-		runners[i] = &camera.Runner{
-			Name:    cam.Name,
-			FFmpeg:  ffmpeg,
-			Args:    plan.Args,
-			Loop:    cam.Loop,
-			Verbose: o.Verbose,
-			Log:     log,
-			Secret:  pass,
-		}
-	}
-
-	runCtx, stopRunners := context.WithCancel(ctx)
-	defer stopRunners()
-	var wg sync.WaitGroup
-	for _, r := range runners {
-		wg.Go(func() { r.Run(runCtx) })
 	}
 	allDone := make(chan struct{})
-	go func() { wg.Wait(); close(allDone) }()
+	dones := make([]<-chan struct{}, len(names))
+	for i, n := range names {
+		dones[i] = e.Done(n)
+	}
+	go func() {
+		for _, d := range dones {
+			<-d
+		}
+		close(allDone)
+	}()
 
-	waitLive(ctx, srv, names, o.ReadyTimeout)
+	waitLive(ctx, e.srv, names, o.ReadyTimeout)
 	if ctx.Err() == nil {
-		printSummary(log, o.Version, cfg, plans, port, srv)
+		printSummary(log, o.Version, cfg, plans, e.Port(), e.srv)
 		if o.OnReady != nil {
-			o.OnReady(port)
+			o.OnReady(e.Port())
 		}
 	}
 
@@ -142,12 +105,7 @@ func Run(ctx context.Context, o Options) error {
 	case <-allDone:
 		log.Infof("", "all videos finished")
 	}
-
-	// Stop ffmpeg first so it can say goodbye to the server; the deferred
-	// srv.Close runs after this.
-	srv.BeginShutdown()
-	stopRunners()
-	wg.Wait()
+	// The deferred e.Close stops ffmpeg and then the server.
 	return nil
 }
 
@@ -280,15 +238,15 @@ func findFFmpeg(custom string) (ffmpeg, ffprobe string, err error) {
 	return ffmpeg, ffprobe, nil
 }
 
-func startError(err error, cfg *config.Config) error {
+func startError(err error, o EngineOptions) error {
 	if errors.Is(err, syscall.EADDRINUSE) {
 		msg := fmt.Sprintf("can't start RTSP server: %v\n", err)
-		msg += fmt.Sprintf("Another program (maybe MediaMTX or another rtsp-streamer) is using port %d", cfg.Port)
-		if cfg.UDP {
-			msg += fmt.Sprintf(" or UDP ports %d-%d", cfg.UDPPort, cfg.UDPPort+1)
+		msg += fmt.Sprintf("Another program (maybe MediaMTX or another rtsp-streamer) is using port %d", o.Port)
+		if o.UDP {
+			msg += fmt.Sprintf(" or UDP ports %d-%d", o.UDPPort, o.UDPPort+1)
 		}
 		msg += ". Stop it, or choose other ports with --port"
-		if cfg.UDP {
+		if o.UDP {
 			msg += " / --udp-port"
 		}
 		return errors.New(msg + ".")

@@ -77,30 +77,33 @@ func BuiltinDefaults() CameraDefaults {
 // File is the YAML file format. Pointer fields tell "not set" apart from a
 // zero value.
 type File struct {
-	Port    *int         `yaml:"port"`
-	Bind    *string      `yaml:"bind"`
-	UDP     *bool        `yaml:"udp"`
-	UDPPort *int         `yaml:"udp_port"`
+	Port    *int         `yaml:"port,omitempty"`
+	Bind    *string      `yaml:"bind,omitempty"`
+	UDP     *bool        `yaml:"udp,omitempty"`
+	UDPPort *int         `yaml:"udp_port,omitempty"`
 	Cameras []FileCamera `yaml:"cameras"`
 }
 
 type FileCamera struct {
-	Name       string   `yaml:"name"`
+	Name       string   `yaml:"name,omitempty"`
 	Source     string   `yaml:"source"`
-	Loop       *bool    `yaml:"loop"`
-	Codec      *string  `yaml:"codec"`
-	Preset     *string  `yaml:"preset"`
-	Tune       *string  `yaml:"tune"`
-	Bitrate    *string  `yaml:"bitrate"`
-	Audio      *bool    `yaml:"audio"`
-	FFmpegArgs []string `yaml:"ffmpeg_args"`
+	Loop       *bool    `yaml:"loop,omitempty"`
+	Codec      *string  `yaml:"codec,omitempty"`
+	Preset     *string  `yaml:"preset,omitempty"`
+	Tune       *string  `yaml:"tune,omitempty"`
+	Bitrate    *string  `yaml:"bitrate,omitempty"`
+	Audio      *bool    `yaml:"audio,omitempty"`
+	FFmpegArgs []string `yaml:"ffmpeg_args,omitempty"`
+	// Enabled false keeps the camera in the file without streaming it. The
+	// interactive UI writes it for cameras that were stopped.
+	Enabled *bool `yaml:"enabled,omitempty"`
 }
 
 // LoadFile reads a YAML config. Unknown keys are an error so typos don't
 // silently fall back to defaults. Relative camera sources are resolved against
 // the file's directory.
 func LoadFile(path string) (*File, error) {
-	data, err := os.ReadFile(expandHome(path))
+	data, err := os.ReadFile(ExpandHome(path))
 	if err != nil {
 		return nil, err
 	}
@@ -110,9 +113,9 @@ func LoadFile(path string) (*File, error) {
 	if err := dec.Decode(&f); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	dir := filepath.Dir(expandHome(path))
+	dir := filepath.Dir(ExpandHome(path))
 	for i := range f.Cameras {
-		src := expandHome(f.Cameras[i].Source)
+		src := ExpandHome(f.Cameras[i].Source)
 		if src != "" && !filepath.IsAbs(src) {
 			src = filepath.Join(dir, src)
 		}
@@ -133,42 +136,25 @@ type Overrides struct {
 // Build merges built-in defaults, the YAML file (may be nil), command-line
 // overrides and positional camera arguments, then validates the result.
 func Build(file *File, ov Overrides, defaults CameraDefaults, args []string) (*Config, error) {
-	cfg := &Config{Port: DefaultPort, UDP: true, UDPPort: DefaultUDPPort}
+	cfg := serverSettings(file, ov)
 
+	disabled := 0
 	if file != nil {
-		setIf(&cfg.Port, file.Port)
-		setIf(&cfg.Bind, file.Bind)
-		setIf(&cfg.UDP, file.UDP)
-		setIf(&cfg.UDPPort, file.UDPPort)
 		for i, fc := range file.Cameras {
-			cam := cameraFromDefaults(defaults)
-			cam.Name = fc.Name
-			cam.Source = fc.Source
-			setIf(&cam.Loop, fc.Loop)
-			if fc.Codec != nil {
-				cam.Codec = Codec(*fc.Codec)
+			if fc.Enabled != nil && !*fc.Enabled {
+				disabled++
+				continue
 			}
-			setIf(&cam.Preset, fc.Preset)
-			setIf(&cam.Tune, fc.Tune)
-			setIf(&cam.Bitrate, fc.Bitrate)
-			setIf(&cam.Audio, fc.Audio)
-			if fc.FFmpegArgs != nil {
-				cam.ExtraArgs = fc.FFmpegArgs
-			}
-			if cam.Name == "" {
-				if cam.Source == "" {
-					return nil, fmt.Errorf("camera #%d in config file has no name and no source", i+1)
-				}
-				cam.Name = NameFromSource(cam.Source)
+			cam, err := CameraFromFile(fc, defaults, i)
+			if err != nil {
+				return nil, err
 			}
 			cfg.Cameras = append(cfg.Cameras, cam)
 		}
 	}
-
-	setIf(&cfg.Port, ov.Port)
-	setIf(&cfg.Bind, ov.Bind)
-	setIf(&cfg.UDP, ov.UDP)
-	setIf(&cfg.UDPPort, ov.UDPPort)
+	if disabled > 0 && len(cfg.Cameras) == 0 && len(args) == 0 {
+		return nil, errors.New("every camera in the config file has enabled: false")
+	}
 
 	for _, a := range args {
 		name, src, err := ParseCameraArg(a)
@@ -185,6 +171,138 @@ func Build(file *File, ov Overrides, defaults CameraDefaults, args []string) (*C
 	}
 	return cfg, nil
 }
+
+// BuildServer resolves only the server settings (no cameras): built-in
+// defaults, then the file (may be nil), then command-line overrides.
+func BuildServer(file *File, ov Overrides) (*Config, error) {
+	cfg := serverSettings(file, ov)
+	if err := cfg.validateServer(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func serverSettings(file *File, ov Overrides) *Config {
+	cfg := &Config{Port: DefaultPort, UDP: true, UDPPort: DefaultUDPPort}
+	if file != nil {
+		setIf(&cfg.Port, file.Port)
+		setIf(&cfg.Bind, file.Bind)
+		setIf(&cfg.UDP, file.UDP)
+		setIf(&cfg.UDPPort, file.UDPPort)
+	}
+	setIf(&cfg.Port, ov.Port)
+	setIf(&cfg.Bind, ov.Bind)
+	setIf(&cfg.UDP, ov.UDP)
+	setIf(&cfg.UDPPort, ov.UDPPort)
+	return cfg
+}
+
+// CameraFromFile turns one camera of a YAML file into a Camera. Fields the
+// file doesn't set come from defaults. i is the camera's position in the
+// file, for the error message. The result is not validated.
+func CameraFromFile(fc FileCamera, defaults CameraDefaults, i int) (Camera, error) {
+	cam := cameraFromDefaults(defaults)
+	cam.Name = fc.Name
+	cam.Source = fc.Source
+	setIf(&cam.Loop, fc.Loop)
+	if fc.Codec != nil {
+		cam.Codec = Codec(*fc.Codec)
+	}
+	setIf(&cam.Preset, fc.Preset)
+	setIf(&cam.Tune, fc.Tune)
+	setIf(&cam.Bitrate, fc.Bitrate)
+	setIf(&cam.Audio, fc.Audio)
+	if fc.FFmpegArgs != nil {
+		cam.ExtraArgs = fc.FFmpegArgs
+	}
+	if cam.Name == "" {
+		if cam.Source == "" {
+			return Camera{}, fmt.Errorf("camera #%d in config file has no name and no source", i+1)
+		}
+		cam.Name = NameFromSource(cam.Source)
+	}
+	return cam, nil
+}
+
+// ToFile is the reverse of CameraFromFile: it writes only the fields that
+// differ from the built-in defaults, so saved files stay short.
+func (c Camera) ToFile(enabled bool) FileCamera {
+	fc := FileCamera{Name: c.Name, Source: c.Source}
+	if !c.Loop {
+		fc.Loop = new(false)
+	}
+	if c.Codec != "" && c.Codec != CodecAuto {
+		fc.Codec = new(string(c.Codec))
+	}
+	if c.Preset != "" && c.Preset != DefaultPreset {
+		fc.Preset = new(c.Preset)
+	}
+	if c.Tune != "" && c.Tune != DefaultTune {
+		fc.Tune = new(c.Tune)
+	}
+	if c.Bitrate != "" {
+		fc.Bitrate = new(c.Bitrate)
+	}
+	if !c.Audio {
+		fc.Audio = new(false)
+	}
+	if len(c.ExtraArgs) > 0 {
+		fc.FFmpegArgs = append([]string(nil), c.ExtraArgs...)
+	}
+	if !enabled {
+		fc.Enabled = new(false)
+	}
+	return fc
+}
+
+const savedHeader = `# rtsp-streamer cameras, saved by the interactive UI (run rtsp-streamer
+# without arguments). The same file also works with: rtsp-streamer -c <file>
+`
+
+// WriteFile saves f as YAML. It writes a temporary file and renames it over
+// path, so a crash never leaves half a file behind.
+func WriteFile(path string, f *File) error {
+	var buf bytes.Buffer
+	buf.WriteString(savedHeader)
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(f); err != nil {
+		return err
+	}
+	if err := enc.Close(); err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // no-op after a successful rename
+	if _, err := tmp.Write(buf.Bytes()); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+// UIConfigPath is where the interactive UI keeps its camera list, normally
+// ~/.config/rtsp-streamer/cameras.yml.
+func UIConfigPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "rtsp-streamer", "cameras.yml"), nil
+}
+
+// NewCamera returns a camera with these settings and no name or source yet.
+func (d CameraDefaults) NewCamera() Camera { return cameraFromDefaults(d) }
 
 func cameraFromDefaults(d CameraDefaults) Camera {
 	return Camera{
@@ -216,8 +334,8 @@ func ParseCameraArg(arg string) (name, source string, err error) {
 	if arg == "" {
 		return "", "", errors.New("empty camera argument")
 	}
-	if _, statErr := os.Stat(expandHome(arg)); statErr == nil || !strings.Contains(arg, "=") {
-		return NameFromSource(arg), expandHome(arg), nil
+	if _, statErr := os.Stat(ExpandHome(arg)); statErr == nil || !strings.Contains(arg, "=") {
+		return NameFromSource(arg), ExpandHome(arg), nil
 	}
 	name, source, _ = strings.Cut(arg, "=")
 	if !ValidName(name) {
@@ -226,7 +344,7 @@ func ParseCameraArg(arg string) (name, source string, err error) {
 	if source == "" {
 		return "", "", fmt.Errorf("camera %q has no video file", name)
 	}
-	return name, expandHome(source), nil
+	return name, ExpandHome(source), nil
 }
 
 var nameCleanRe = regexp.MustCompile(`[^A-Za-z0-9_.-]+`)
@@ -281,6 +399,25 @@ func (c *Config) validate() error {
 	if len(c.Cameras) == 0 {
 		return ErrNoCameras
 	}
+	if err := c.validateServer(); err != nil {
+		return err
+	}
+
+	seen := map[string]string{}
+	for i := range c.Cameras {
+		cam := &c.Cameras[i]
+		if prev, ok := seen[cam.Name]; ok {
+			return fmt.Errorf("two cameras are named %q (%s and %s); give them different names with name=video", cam.Name, prev, cam.Source)
+		}
+		seen[cam.Name] = cam.Source
+		if err := ValidateCamera(cam); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateServer() error {
 	if c.Port < 1 || c.Port > 65535 {
 		return fmt.Errorf("invalid port %d", c.Port)
 	}
@@ -289,56 +426,52 @@ func (c *Config) validate() error {
 			return fmt.Errorf("invalid UDP port %d: must be an even number (RTP uses it, RTCP uses the next one)", c.UDPPort)
 		}
 	}
+	return nil
+}
 
-	seen := map[string]string{}
-	for i := range c.Cameras {
-		cam := &c.Cameras[i]
-		if !ValidName(cam.Name) {
-			return fmt.Errorf("invalid camera name %q: use letters, digits, '-', '_' or '.'", cam.Name)
+// ValidateCamera checks one camera and fills in what can be derived: the
+// absolute video path and the default x264 preset and tune.
+func ValidateCamera(cam *Camera) error {
+	if !ValidName(cam.Name) {
+		return fmt.Errorf("invalid camera name %q: use letters, digits, '-', '_' or '.'", cam.Name)
+	}
+	if cam.Source == "" {
+		return fmt.Errorf("camera %q has no source", cam.Name)
+	}
+	abs, err := filepath.Abs(ExpandHome(cam.Source))
+	if err != nil {
+		return err
+	}
+	cam.Source = abs
+	fi, err := os.Stat(abs)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("camera %q: video file not found: %s", cam.Name, abs)
 		}
-		if prev, ok := seen[cam.Name]; ok {
-			return fmt.Errorf("two cameras are named %q (%s and %s); give them different names with name=video", cam.Name, prev, cam.Source)
-		}
-		seen[cam.Name] = cam.Source
+		return fmt.Errorf("camera %q: %w", cam.Name, err)
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("camera %q: not a regular file: %s", cam.Name, abs)
+	}
 
-		if cam.Source == "" {
-			return fmt.Errorf("camera %q has no source", cam.Name)
+	switch cam.Codec {
+	case CodecAuto, CodecCopy, CodecH264:
+	default:
+		return fmt.Errorf("camera %q: unknown codec %q (use auto, copy or h264)", cam.Name, cam.Codec)
+	}
+	if cam.Bitrate != "" {
+		if cam.Codec == CodecCopy {
+			return fmt.Errorf("camera %q: bitrate needs re-encoding, it can't be used with codec copy", cam.Name)
 		}
-		abs, err := filepath.Abs(cam.Source)
-		if err != nil {
-			return err
-		}
-		cam.Source = abs
-		fi, err := os.Stat(abs)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("camera %q: video file not found: %s", cam.Name, abs)
-			}
+		if _, err := ParseBitrate(cam.Bitrate); err != nil {
 			return fmt.Errorf("camera %q: %w", cam.Name, err)
 		}
-		if !fi.Mode().IsRegular() {
-			return fmt.Errorf("camera %q: not a regular file: %s", cam.Name, abs)
-		}
-
-		switch cam.Codec {
-		case CodecAuto, CodecCopy, CodecH264:
-		default:
-			return fmt.Errorf("camera %q: unknown codec %q (use auto, copy or h264)", cam.Name, cam.Codec)
-		}
-		if cam.Bitrate != "" {
-			if cam.Codec == CodecCopy {
-				return fmt.Errorf("camera %q: bitrate needs re-encoding, it can't be used with codec copy", cam.Name)
-			}
-			if _, err := ParseBitrate(cam.Bitrate); err != nil {
-				return fmt.Errorf("camera %q: %w", cam.Name, err)
-			}
-		}
-		if cam.Preset == "" {
-			cam.Preset = DefaultPreset
-		}
-		if cam.Tune == "" {
-			cam.Tune = DefaultTune
-		}
+	}
+	if cam.Preset == "" {
+		cam.Preset = DefaultPreset
+	}
+	if cam.Tune == "" {
+		cam.Tune = DefaultTune
 	}
 	return nil
 }
@@ -346,7 +479,8 @@ func (c *Config) validate() error {
 // ErrNoCameras is returned when no camera was given at all.
 var ErrNoCameras = errors.New("no video given")
 
-func expandHome(p string) string {
+// ExpandHome replaces a leading "~" with the home directory.
+func ExpandHome(p string) string {
 	if p == "~" || strings.HasPrefix(p, "~/") {
 		if h, err := os.UserHomeDir(); err == nil {
 			return filepath.Join(h, p[1:])

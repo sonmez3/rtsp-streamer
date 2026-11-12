@@ -27,10 +27,6 @@ type Options struct {
 	UDP     bool   // let viewers use RTSP over UDP
 	UDPPort int    // RTP port for UDP viewers, RTCP is UDPPort+1
 
-	Names []string // camera names; the only paths that exist
-	// Cameras that play once; their publisher leaving is expected.
-	Once map[string]bool
-
 	// Credentials our ffmpeg processes use to publish. Nobody else may publish.
 	PublishUser string
 	PublishPass string
@@ -49,11 +45,13 @@ type Server struct {
 
 type path struct {
 	name      string
+	once      bool // plays its video once; the publisher leaving is expected
 	stream    *gortsplib.ServerStream
 	publisher *gortsplib.ServerSession
 	viewers   int
 	live      chan struct{} // closed the first time the path goes live
 	wasLive   bool
+	removed   bool // taken away with RemovePath; stay quiet about it
 }
 
 // Stored on each gortsplib session so we know what it is when it closes.
@@ -66,9 +64,6 @@ type sessionInfo struct {
 
 func New(opts Options) *Server {
 	s := &Server{opts: opts, paths: make(map[string]*path)}
-	for _, n := range opts.Names {
-		s.paths[n] = &path{name: n, live: make(chan struct{})}
-	}
 	s.rs = &gortsplib.Server{
 		Handler:        &handler{s},
 		RTSPAddress:    net.JoinHostPort(opts.Bind, strconv.Itoa(opts.Port)),
@@ -103,16 +98,57 @@ func (s *Server) Close() {
 	s.rs.Close()
 }
 
-// Live returns a channel that is closed the first time the camera goes live.
+// AddPath makes a camera's stream available at /name. once means the camera
+// plays its video once, so its publisher leaving is expected.
+func (s *Server) AddPath(name string, once bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.paths[name]; ok {
+		return fmt.Errorf("a stream named %q already exists", name)
+	}
+	s.paths[name] = &path{name: name, once: once, live: make(chan struct{})}
+	return nil
+}
+
+// RemovePath takes a camera's stream away. New viewers get "not found" right
+// away. The publisher and the current viewers are disconnected when the
+// publisher leaves, so stop its ffmpeg next. Nothing is logged for either.
+func (s *Server) RemovePath(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p, ok := s.paths[name]; ok {
+		p.removed = true
+		delete(s.paths, name)
+	}
+}
+
+// Live returns a channel that is closed the first time the camera goes live,
+// or nil if there is no such camera.
 func (s *Server) Live(name string) <-chan struct{} {
-	return s.paths[name].live
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p, ok := s.paths[name]; ok {
+		return p.live
+	}
+	return nil
 }
 
 // IsLive reports whether the camera is being published right now.
 func (s *Server) IsLive(name string) bool {
+	live, _ := s.Status(name)
+	return live
+}
+
+// Status reports whether the camera is being published right now and how
+// many viewers are watching it.
+func (s *Server) Status(name string) (live bool, viewers int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.paths[name].stream != nil
+	p, ok := s.paths[name]
+	if !ok {
+		return false, 0
+	}
+	return p.stream != nil, p.viewers
 }
 
 func (s *Server) lookup(rawPath string) *path {
@@ -120,6 +156,9 @@ func (s *Server) lookup(rawPath string) *path {
 }
 
 func (s *Server) names() string {
+	if len(s.paths) == 0 {
+		return "none"
+	}
 	n := make([]string, 0, len(s.paths))
 	for k := range s.paths {
 		n = append(n, k)
@@ -154,8 +193,8 @@ func (h *handler) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCtx) 
 		p.stream.Close() // disconnects the viewers too
 		p.stream, p.publisher = nil, nil
 		switch {
-		case s.closing:
-		case s.opts.Once[p.name]:
+		case s.closing || p.removed:
+		case p.once:
 			s.opts.Log.Infof(p.name, "stream ended")
 		default:
 			s.opts.Log.Warnf(p.name, "stream offline")
@@ -163,7 +202,7 @@ func (h *handler) OnSessionClose(ctx *gortsplib.ServerHandlerOnSessionCloseCtx) 
 	}
 	if info.viewer {
 		p.viewers--
-		if !s.closing {
+		if !s.closing && !p.removed {
 			s.opts.Log.Infof(p.name, "viewer %s left (%d watching)", info.addr, p.viewers)
 		}
 	}
